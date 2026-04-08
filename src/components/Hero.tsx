@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { Search, Zap, Loader2, Sparkles, TrendingUp, ShoppingCart, Target, BarChart3, Users, Globe, Instagram, Facebook, MessageCircle, ShoppingBag, Laptop, Heart, Dumbbell, Home } from 'lucide-react';
-import { GoogleGenAI } from "@google/genai";
+import { Search, Zap, Loader2, Sparkles } from 'lucide-react';
+import { GoogleGenAI, Type } from "@google/genai";
 import { motion, AnimatePresence } from "motion/react";
+import AnalysisResult, { ProductData } from './AnalysisResult';
 
 const PLATFORMS = [
   { name: 'LeBonCoin', color: 'bg-orange-500/20 text-orange-400 border-orange-500/30' },
@@ -29,32 +30,271 @@ const SUGGESTED_QUERIES = [
 export default function Hero() {
   const [query, setQuery] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [result, setResult] = useState<string | null>(null);
+  const [products, setProducts] = useState<ProductData[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleAnalyze = async () => {
-    if (!query.trim()) return;
+  const handleAnalyze = async (searchQuery?: string) => {
+    const finalQuery = searchQuery || query;
+    if (!finalQuery.trim()) return;
     
     setIsAnalyzing(true);
-    setResult(null);
+    setProducts(null);
+    setError(null);
+
+    const analyzeWithRetry = async (query: string, retries = 2): Promise<any> => {
+      try {
+        let apiKey = process.env.GEMINI_API_KEY;
+        
+        // If apiKey is not available (production deployment), fetch it from our server
+        if (!apiKey) {
+          try {
+            const configRes = await fetch('/api/config');
+            const configData = await configRes.json();
+            apiKey = configData.apiKey;
+          } catch (e) {
+            console.error("Failed to fetch API key from server:", e);
+          }
+        }
+
+        if (!apiKey) {
+          throw new Error("Clé API manquante. Veuillez configurer GEMINI_API_KEY dans les paramètres de votre déploiement Cloud Run.");
+        }
+
+        const ai = new GoogleGenAI({ apiKey });
+        const response = await ai.models.generateContent({
+          model: "gemini-3.1-flash-lite-preview",
+          contents: [{ role: 'user', parts: [{ text: `Analyse cette requête e-commerce pour le marché français : "${query}". 
+          Propose 3 produits gagnants. 
+          IMPORTANT : Sois extrêmement bref. Chaque description < 80 caractères. 
+          Chaque liste (pros, cons, etc.) = exactement 3 éléments ultra-courts.
+          evolutionData = exactement 6 mois.
+          Ajoute des infos sur l'influence, le potentiel viral TikTok, des scripts UGC, des flows email, le potentiel Europe, et des idées de bundles.` }] }],
+          config: {
+            systemInstruction: "Tu es un expert e-commerce. Réponds exclusivement en JSON. Brièveté absolue requise. Pas de phrases complexes. Maximum 3 éléments par tableau (sauf evolutionData: 6).",
+            temperature: 0.4,
+            topP: 0.8,
+            topK: 40,
+            maxOutputTokens: 8192,
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  name: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                  price: { type: Type.STRING },
+                  margin: { type: Type.STRING },
+                  platforms: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  adPlatforms: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  trendScore: { type: Type.NUMBER },
+                  evolutionData: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        month: { type: Type.STRING },
+                        value: { type: Type.NUMBER }
+                      }
+                    }
+                  },
+                  pros: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  cons: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  targetAudience: { type: Type.STRING },
+                  financials: {
+                    type: Type.OBJECT,
+                    properties: {
+                      cogs: { type: Type.STRING },
+                      shipping: { type: Type.STRING },
+                      marketingCPA: { type: Type.STRING },
+                      netProfit: { type: Type.STRING },
+                      roi: { type: Type.STRING }
+                    },
+                    required: ["cogs", "shipping", "marketingCPA", "netProfit", "roi"]
+                  },
+                  strategy: {
+                    type: Type.OBJECT,
+                    properties: {
+                      launchPhase: { type: Type.STRING },
+                      scalingPhase: { type: Type.STRING },
+                      creativeHooks: { type: Type.ARRAY, items: { type: Type.STRING } },
+                      adCopyIdea: { type: Type.STRING }
+                    },
+                    required: ["launchPhase", "scalingPhase", "creativeHooks", "adCopyIdea"]
+                  },
+                  competitors: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        name: { type: Type.STRING },
+                        price: { type: Type.STRING },
+                        strategy: { type: Type.STRING }
+                      }
+                    }
+                  },
+                  supplyChain: {
+                    type: Type.OBJECT,
+                    properties: {
+                      supplierType: { type: Type.STRING },
+                      shippingTime: { type: Type.STRING },
+                      moq: { type: Type.STRING }
+                    },
+                    required: ["supplierType", "shippingTime", "moq"]
+                  },
+                  marketAnalysis: {
+                    type: Type.OBJECT,
+                    properties: {
+                      saturationIndex: { type: Type.NUMBER },
+                      seasonality: { type: Type.STRING },
+                      seoKeywords: { type: Type.ARRAY, items: { type: Type.STRING } },
+                      marketSize: { type: Type.STRING }
+                    },
+                    required: ["saturationIndex", "seasonality", "seoKeywords", "marketSize"]
+                  },
+                  customerPersona: {
+                    type: Type.OBJECT,
+                    properties: {
+                      ageRange: { type: Type.STRING },
+                      interests: { type: Type.ARRAY, items: { type: Type.STRING } },
+                      painPoints: { type: Type.ARRAY, items: { type: Type.STRING } },
+                      buyingTriggers: { type: Type.ARRAY, items: { type: Type.STRING } }
+                    },
+                    required: ["ageRange", "interests", "painPoints", "buyingTriggers"]
+                  },
+                  riskAssessment: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        risk: { type: Type.STRING },
+                        mitigation: { type: Type.STRING }
+                      }
+                    }
+                  },
+                  growthHacks: {
+                    type: Type.OBJECT,
+                    properties: {
+                      upsell: { type: Type.STRING },
+                      crossSell: { type: Type.STRING },
+                      referralLoop: { type: Type.STRING }
+                    },
+                    required: ["upsell", "crossSell", "referralLoop"]
+                  },
+                  contentStrategy: {
+                    type: Type.OBJECT,
+                    properties: {
+                      pillars: { type: Type.ARRAY, items: { type: Type.STRING } },
+                      hooks: { type: Type.ARRAY, items: { type: Type.STRING } }
+                    },
+                    required: ["pillars", "hooks"]
+                  },
+                  legalCompliance: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  radarData: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        subject: { type: Type.STRING },
+                        A: { type: Type.NUMBER },
+                        fullMark: { type: Type.NUMBER }
+                      }
+                    }
+                  },
+                  influencerStrategy: {
+                    type: Type.OBJECT,
+                    properties: {
+                      type: { type: Type.STRING },
+                      suggestedCollabs: { type: Type.ARRAY, items: { type: Type.STRING } }
+                    },
+                    required: ["type", "suggestedCollabs"]
+                  },
+                  viralPotential: {
+                    type: Type.OBJECT,
+                    properties: {
+                      score: { type: Type.NUMBER },
+                      reasons: { type: Type.ARRAY, items: { type: Type.STRING } }
+                    },
+                    required: ["score", "reasons"]
+                  },
+                  ugcScripts: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        hook: { type: Type.STRING },
+                        body: { type: Type.STRING },
+                        callToAction: { type: Type.STRING }
+                      }
+                    }
+                  },
+                  emailFlows: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        name: { type: Type.STRING },
+                        subject: { type: Type.STRING },
+                        goal: { type: Type.STRING }
+                      }
+                    }
+                  },
+                  crossBorderPotential: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  sustainabilityScore: { type: Type.NUMBER },
+                  estimatedMonthlyRevenue: { type: Type.STRING },
+                  bundleIdeas: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        name: { type: Type.STRING },
+                        products: { type: Type.ARRAY, items: { type: Type.STRING } },
+                        aovBoost: { type: Type.STRING }
+                      }
+                    }
+                  },
+                  imagePrompt: { type: Type.STRING }
+                },
+                required: ["name", "description", "price", "margin", "platforms", "adPlatforms", "trendScore", "evolutionData", "pros", "cons", "targetAudience", "financials", "strategy", "competitors", "supplyChain", "marketAnalysis", "customerPersona", "riskAssessment", "growthHacks", "contentStrategy", "legalCompliance", "radarData", "influencerStrategy", "viralPotential", "ugcScripts", "emailFlows", "crossBorderPotential", "sustainabilityScore", "estimatedMonthlyRevenue", "bundleIdeas", "imagePrompt"]
+              }
+            }
+          }
+        });
+
+        let text = response.text || "[]";
+        if (!text) throw new Error("L'IA a retourné une réponse vide.");
+
+        if (text.includes("```")) {
+          text = text.replace(/```json\n?|```/g, "").trim();
+        }
+        
+        if (!text.endsWith("]") && !text.endsWith("}")) {
+          if (text.lastIndexOf("}") > text.lastIndexOf("]")) {
+             text += "]";
+          } else {
+             text += "}]";
+          }
+        }
+        
+        return JSON.parse(text);
+      } catch (err: any) {
+        if (retries > 0 && err.message?.includes("503") || err.message?.includes("high demand")) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          return analyzeWithRetry(query, retries - 1);
+        }
+        throw err;
+      }
+    };
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Tu es un expert en e-commerce et analyse de marché pour le marché français. 
-        L'utilisateur demande : "${query}". 
-        Analyse cette requête et propose 3 produits gagnants potentiels avec :
-        - Nom du produit
-        - Pourquoi c'est un gagnant (tendance TikTok, Amazon, etc.)
-        - Marge estimée
-        - Plateforme recommandée pour la vente.
-        Réponds en français avec un ton professionnel et enthousiaste. Utilise des emojis.`,
-      });
-
-      setResult(response.text || "Désolé, je n'ai pas pu analyser cette requête.");
-    } catch (error) {
-      console.error("Analysis failed:", error);
-      setResult("Une erreur est survenue lors de l'analyse. Veuillez réessayer.");
+      const data = await analyzeWithRetry(finalQuery);
+      if (!Array.isArray(data) || data.length === 0) {
+        throw new Error("Format de données invalide reçu de l'IA.");
+      }
+      setProducts(data);
+    } catch (err) {
+      console.error("Analysis failed:", err);
+      setError(err instanceof Error ? err.message : "Une erreur est survenue lors de l'analyse. Veuillez réessayer.");
     } finally {
       setIsAnalyzing(false);
     }
@@ -123,16 +363,16 @@ export default function Hero() {
               />
             </div>
             <button 
-              onClick={handleAnalyze}
+              onClick={() => handleAnalyze()}
               disabled={isAnalyzing}
-              className="btn-primary flex items-center gap-2 py-3 px-8 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="btn-primary flex items-center gap-2 py-3 px-8 disabled:opacity-50 disabled:cursor-not-allowed min-w-[140px] justify-center"
             >
               {isAnalyzing ? (
                 <Loader2 className="w-5 h-5 animate-spin" />
               ) : (
                 <Zap className="w-5 h-5 fill-current" />
               )}
-              Scanner
+              {isAnalyzing ? 'Analyse...' : 'Analyser'}
             </button>
           </div>
         </motion.div>
@@ -146,7 +386,10 @@ export default function Hero() {
           {SUGGESTED_QUERIES.map((q) => (
             <button 
               key={q} 
-              onClick={() => setQuery(q)}
+              onClick={() => {
+                setQuery(q);
+                handleAnalyze(q);
+              }}
               className="text-[11px] text-gray-500 hover:text-white bg-white/5 hover:bg-white/10 px-3 py-1.5 rounded-lg border border-white/5 transition-all"
             >
               {q}
@@ -154,22 +397,21 @@ export default function Hero() {
           ))}
         </motion.div>
 
+        {error && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            className="mt-8 p-4 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-sm"
+          >
+            {error}
+          </motion.div>
+        )}
+
         <AnimatePresence>
-          {result && (
-            <motion.div 
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              className="mt-12 text-left glass rounded-2xl p-8 max-w-3xl mx-auto border-primary/20"
-            >
-              <div className="flex items-center gap-2 mb-4 text-primary">
-                <Sparkles className="w-5 h-5" />
-                <h3 className="font-bold">Analyse de l'IA terminée</h3>
-              </div>
-              <div className="prose prose-invert max-w-none text-gray-300 whitespace-pre-wrap">
-                {result}
-              </div>
-            </motion.div>
+          {products && (
+            <div className="text-left w-full max-w-7xl mx-auto">
+              <AnalysisResult products={products} />
+            </div>
           )}
         </AnimatePresence>
       </div>
