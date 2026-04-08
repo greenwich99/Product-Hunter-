@@ -292,9 +292,10 @@ export default function Hero() {
         throw new Error("Format de données invalide reçu de l'IA.");
       }
       setProducts(data);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Analysis failed:", err);
-      setError(err instanceof Error ? err.message : "Une erreur est survenue lors de l'analyse. Veuillez réessayer.");
+      const message = err.message || "Erreur inconnue";
+      setError(`Erreur: ${message}. Veuillez vérifier votre configuration Cloud Run.`);
     } finally {
       setIsAnalyzing(false);
     }
