@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Search, Zap, Loader2, Sparkles } from 'lucide-react';
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
 import { motion, AnimatePresence } from "motion/react";
 import AnalysisResult, { ProductData } from './AnalysisResult';
 
@@ -30,272 +30,307 @@ const SUGGESTED_QUERIES = [
 export default function Hero() {
   const [query, setQuery] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [products, setProducts] = useState<ProductData[] | null>(null);
+  const [products, setProducts] = useState<(ProductData | null)[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Cache API key to avoid redundant fetches
+  const [cachedApiKey, setCachedApiKey] = useState<string | null>(null);
+
+  const getApiKey = async () => {
+    let apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      try {
+        const configRes = await fetch('/api/config');
+        const configData = await configRes.json();
+        apiKey = configData.apiKey;
+      } catch (e) {
+        console.error("Failed to fetch API key from server:", e);
+      }
+    }
+    if (!apiKey) {
+      throw new Error("Clé API manquante. Veuillez configurer GEMINI_API_KEY.");
+    }
+    return apiKey;
+  };
+
+  // Pre-fetch API key on mount
+  useEffect(() => {
+    const fetchKey = async () => {
+      try {
+        const apiKey = await getApiKey();
+        setCachedApiKey(apiKey);
+      } catch (e) {
+        console.error("Pre-fetching API key failed:", e);
+      }
+    };
+    fetchKey();
+  }, []);
 
   const handleAnalyze = async (searchQuery?: string) => {
     const finalQuery = searchQuery || query;
     if (!finalQuery.trim()) return;
     
     setIsAnalyzing(true);
-    setProducts(null);
+    setProducts([null, null, null]); // Initialize with placeholders
     setError(null);
 
-    const analyzeWithRetry = async (query: string, retries = 2): Promise<any> => {
+    const analyzeSingleProduct = async (query: string, index: number, retries = 3): Promise<ProductData> => {
       try {
-        let apiKey = process.env.GEMINI_API_KEY;
+        const apiKey = cachedApiKey || await getApiKey();
+        if (!cachedApiKey) setCachedApiKey(apiKey);
         
-        // If apiKey is not available (production deployment), fetch it from our server
-        if (!apiKey) {
-          try {
-            const configRes = await fetch('/api/config');
-            const configData = await configRes.json();
-            apiKey = configData.apiKey;
-          } catch (e) {
-            console.error("Failed to fetch API key from server:", e);
-          }
-        }
-
-        if (!apiKey) {
-          throw new Error("Clé API manquante. Veuillez configurer GEMINI_API_KEY dans les paramètres de votre déploiement Cloud Run.");
-        }
-
         const ai = new GoogleGenAI({ apiKey });
+        
+        const prompts = [
+          "Produit #1: Focus Marge & Rentabilité.",
+          "Produit #2: Focus Viralité TikTok & Ads.",
+          "Produit #3: Focus Niche & Long Terme."
+        ];
+
+        // Model rotation: prioritize Flash for reliability, then Lite
+        const models = ["gemini-3-flash-preview", "gemini-3.1-flash-lite-preview", "gemini-flash-latest"];
+        const modelToUse = models[Math.min(3 - retries, models.length - 1)];
+
         const response = await ai.models.generateContent({
-          model: "gemini-3.1-flash-lite-preview",
-          contents: [{ role: 'user', parts: [{ text: `Analyse cette requête e-commerce pour le marché français : "${query}". 
-          Propose 3 produits gagnants. 
-          IMPORTANT : Sois extrêmement bref. Chaque description < 80 caractères. 
-          Chaque liste (pros, cons, etc.) = exactement 3 éléments ultra-courts.
-          evolutionData = exactement 6 mois.
-          Ajoute des infos sur l'influence, le potentiel viral TikTok, des scripts UGC, des flows email, le potentiel Europe, et des idées de bundles.` }] }],
+          model: modelToUse,
+          contents: [{ role: 'user', parts: [{ text: `Analyse stratégique pour "${query}". 
+          ${prompts[index]}
+          Génère 1 produit détaillé. 
+          Format: JSON valide uniquement.
+          Style: Concis mais complet.` }] }],
           config: {
-            systemInstruction: "Tu es un expert e-commerce. Réponds exclusivement en JSON. Brièveté absolue requise. Pas de phrases complexes. Maximum 3 éléments par tableau (sauf evolutionData: 6).",
+            systemInstruction: "Tu es un expert en e-commerce et dropshipping. Génère un rapport d'opportunité produit au format JSON. Sois précis et stratégique. Utilise le français.",
             temperature: 0.4,
-            topP: 0.8,
-            topK: 40,
-            maxOutputTokens: 8192,
             responseMimeType: "application/json",
             responseSchema: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  name: { type: Type.STRING },
-                  description: { type: Type.STRING },
-                  price: { type: Type.STRING },
-                  margin: { type: Type.STRING },
-                  platforms: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  adPlatforms: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  trendScore: { type: Type.NUMBER },
-                  evolutionData: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        month: { type: Type.STRING },
-                        value: { type: Type.NUMBER }
-                      }
+              type: Type.OBJECT,
+              properties: {
+                name: { type: Type.STRING },
+                description: { type: Type.STRING },
+                price: { type: Type.STRING },
+                margin: { type: Type.STRING },
+                platforms: { type: Type.ARRAY, items: { type: Type.STRING } },
+                adPlatforms: { type: Type.ARRAY, items: { type: Type.STRING } },
+                trendScore: { type: Type.NUMBER },
+                evolutionData: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      month: { type: Type.STRING },
+                      value: { type: Type.NUMBER }
                     }
-                  },
-                  pros: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  cons: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  targetAudience: { type: Type.STRING },
-                  financials: {
-                    type: Type.OBJECT,
-                    properties: {
-                      cogs: { type: Type.STRING },
-                      shipping: { type: Type.STRING },
-                      marketingCPA: { type: Type.STRING },
-                      netProfit: { type: Type.STRING },
-                      roi: { type: Type.STRING }
-                    },
-                    required: ["cogs", "shipping", "marketingCPA", "netProfit", "roi"]
-                  },
-                  strategy: {
-                    type: Type.OBJECT,
-                    properties: {
-                      launchPhase: { type: Type.STRING },
-                      scalingPhase: { type: Type.STRING },
-                      creativeHooks: { type: Type.ARRAY, items: { type: Type.STRING } },
-                      adCopyIdea: { type: Type.STRING }
-                    },
-                    required: ["launchPhase", "scalingPhase", "creativeHooks", "adCopyIdea"]
-                  },
-                  competitors: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        name: { type: Type.STRING },
-                        price: { type: Type.STRING },
-                        strategy: { type: Type.STRING }
-                      }
-                    }
-                  },
-                  supplyChain: {
-                    type: Type.OBJECT,
-                    properties: {
-                      supplierType: { type: Type.STRING },
-                      shippingTime: { type: Type.STRING },
-                      moq: { type: Type.STRING }
-                    },
-                    required: ["supplierType", "shippingTime", "moq"]
-                  },
-                  marketAnalysis: {
-                    type: Type.OBJECT,
-                    properties: {
-                      saturationIndex: { type: Type.NUMBER },
-                      seasonality: { type: Type.STRING },
-                      seoKeywords: { type: Type.ARRAY, items: { type: Type.STRING } },
-                      marketSize: { type: Type.STRING }
-                    },
-                    required: ["saturationIndex", "seasonality", "seoKeywords", "marketSize"]
-                  },
-                  customerPersona: {
-                    type: Type.OBJECT,
-                    properties: {
-                      ageRange: { type: Type.STRING },
-                      interests: { type: Type.ARRAY, items: { type: Type.STRING } },
-                      painPoints: { type: Type.ARRAY, items: { type: Type.STRING } },
-                      buyingTriggers: { type: Type.ARRAY, items: { type: Type.STRING } }
-                    },
-                    required: ["ageRange", "interests", "painPoints", "buyingTriggers"]
-                  },
-                  riskAssessment: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        risk: { type: Type.STRING },
-                        mitigation: { type: Type.STRING }
-                      }
-                    }
-                  },
-                  growthHacks: {
-                    type: Type.OBJECT,
-                    properties: {
-                      upsell: { type: Type.STRING },
-                      crossSell: { type: Type.STRING },
-                      referralLoop: { type: Type.STRING }
-                    },
-                    required: ["upsell", "crossSell", "referralLoop"]
-                  },
-                  contentStrategy: {
-                    type: Type.OBJECT,
-                    properties: {
-                      pillars: { type: Type.ARRAY, items: { type: Type.STRING } },
-                      hooks: { type: Type.ARRAY, items: { type: Type.STRING } }
-                    },
-                    required: ["pillars", "hooks"]
-                  },
-                  legalCompliance: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  radarData: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        subject: { type: Type.STRING },
-                        A: { type: Type.NUMBER },
-                        fullMark: { type: Type.NUMBER }
-                      }
-                    }
-                  },
-                  influencerStrategy: {
-                    type: Type.OBJECT,
-                    properties: {
-                      type: { type: Type.STRING },
-                      suggestedCollabs: { type: Type.ARRAY, items: { type: Type.STRING } }
-                    },
-                    required: ["type", "suggestedCollabs"]
-                  },
-                  viralPotential: {
-                    type: Type.OBJECT,
-                    properties: {
-                      score: { type: Type.NUMBER },
-                      reasons: { type: Type.ARRAY, items: { type: Type.STRING } }
-                    },
-                    required: ["score", "reasons"]
-                  },
-                  ugcScripts: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        hook: { type: Type.STRING },
-                        body: { type: Type.STRING },
-                        callToAction: { type: Type.STRING }
-                      }
-                    }
-                  },
-                  emailFlows: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        name: { type: Type.STRING },
-                        subject: { type: Type.STRING },
-                        goal: { type: Type.STRING }
-                      }
-                    }
-                  },
-                  crossBorderPotential: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  sustainabilityScore: { type: Type.NUMBER },
-                  estimatedMonthlyRevenue: { type: Type.STRING },
-                  bundleIdeas: {
-                    type: Type.ARRAY,
-                    items: {
-                      type: Type.OBJECT,
-                      properties: {
-                        name: { type: Type.STRING },
-                        products: { type: Type.ARRAY, items: { type: Type.STRING } },
-                        aovBoost: { type: Type.STRING }
-                      }
-                    }
-                  },
-                  imagePrompt: { type: Type.STRING }
+                  }
                 },
-                required: ["name", "description", "price", "margin", "platforms", "adPlatforms", "trendScore", "evolutionData", "pros", "cons", "targetAudience", "financials", "strategy", "competitors", "supplyChain", "marketAnalysis", "customerPersona", "riskAssessment", "growthHacks", "contentStrategy", "legalCompliance", "radarData", "influencerStrategy", "viralPotential", "ugcScripts", "emailFlows", "crossBorderPotential", "sustainabilityScore", "estimatedMonthlyRevenue", "bundleIdeas", "imagePrompt"]
-              }
+                pros: { type: Type.ARRAY, items: { type: Type.STRING } },
+                cons: { type: Type.ARRAY, items: { type: Type.STRING } },
+                targetAudience: { type: Type.STRING },
+                financials: {
+                  type: Type.OBJECT,
+                  properties: {
+                    cogs: { type: Type.STRING },
+                    shipping: { type: Type.STRING },
+                    marketingCPA: { type: Type.STRING },
+                    netProfit: { type: Type.STRING },
+                    roi: { type: Type.STRING }
+                  }
+                },
+                strategy: {
+                  type: Type.OBJECT,
+                  properties: {
+                    launchPhase: { type: Type.STRING },
+                    scalingPhase: { type: Type.STRING },
+                    creativeHooks: { type: Type.ARRAY, items: { type: Type.STRING } },
+                    adCopyIdea: { type: Type.STRING }
+                  }
+                },
+                competitors: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      name: { type: Type.STRING },
+                      price: { type: Type.STRING },
+                      strategy: { type: Type.STRING }
+                    }
+                  }
+                },
+                supplyChain: {
+                  type: Type.OBJECT,
+                  properties: {
+                    supplierType: { type: Type.STRING },
+                    shippingTime: { type: Type.STRING },
+                    moq: { type: Type.STRING }
+                  }
+                },
+                marketAnalysis: {
+                  type: Type.OBJECT,
+                  properties: {
+                    saturationIndex: { type: Type.NUMBER },
+                    seasonality: { type: Type.STRING },
+                    seoKeywords: { type: Type.ARRAY, items: { type: Type.STRING } },
+                    marketSize: { type: Type.STRING }
+                  }
+                },
+                customerPersona: {
+                  type: Type.OBJECT,
+                  properties: {
+                    ageRange: { type: Type.STRING },
+                    interests: { type: Type.ARRAY, items: { type: Type.STRING } },
+                    painPoints: { type: Type.ARRAY, items: { type: Type.STRING } },
+                    buyingTriggers: { type: Type.ARRAY, items: { type: Type.STRING } }
+                  }
+                },
+                riskAssessment: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      risk: { type: Type.STRING },
+                      mitigation: { type: Type.STRING }
+                    }
+                  }
+                },
+                growthHacks: {
+                  type: Type.OBJECT,
+                  properties: {
+                    upsell: { type: Type.STRING },
+                    crossSell: { type: Type.STRING },
+                    referralLoop: { type: Type.STRING }
+                  }
+                },
+                contentStrategy: {
+                  type: Type.OBJECT,
+                  properties: {
+                    pillars: { type: Type.ARRAY, items: { type: Type.STRING } },
+                    hooks: { type: Type.ARRAY, items: { type: Type.STRING } }
+                  }
+                },
+                legalCompliance: { type: Type.ARRAY, items: { type: Type.STRING } },
+                radarData: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      subject: { type: Type.STRING },
+                      A: { type: Type.NUMBER },
+                      fullMark: { type: Type.NUMBER }
+                    }
+                  }
+                },
+                influencerStrategy: {
+                  type: Type.OBJECT,
+                  properties: {
+                    type: { type: Type.STRING },
+                    suggestedCollabs: { type: Type.ARRAY, items: { type: Type.STRING } }
+                  }
+                },
+                viralPotential: {
+                  type: Type.OBJECT,
+                  properties: {
+                    score: { type: Type.NUMBER },
+                    reasons: { type: Type.ARRAY, items: { type: Type.STRING } }
+                  }
+                },
+                ugcScripts: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      hook: { type: Type.STRING },
+                      body: { type: Type.STRING },
+                      callToAction: { type: Type.STRING }
+                    }
+                  }
+                },
+                emailFlows: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      name: { type: Type.STRING },
+                      subject: { type: Type.STRING },
+                      goal: { type: Type.STRING }
+                    }
+                  }
+                },
+                crossBorderPotential: { type: Type.ARRAY, items: { type: Type.STRING } },
+                sustainabilityScore: { type: Type.NUMBER },
+                estimatedMonthlyRevenue: { type: Type.STRING },
+                bundleIdeas: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      name: { type: Type.STRING },
+                      products: { type: Type.ARRAY, items: { type: Type.STRING } },
+                      aovBoost: { type: Type.STRING }
+                    }
+                  }
+                },
+                imagePrompt: { type: Type.STRING }
+              },
+              required: ["name", "description", "price", "margin", "trendScore", "evolutionData", "imagePrompt"]
             }
           }
         });
 
-        let text = response.text || "[]";
-        if (!text) throw new Error("L'IA a retourné une réponse vide.");
-
+        let text = response.text || "{}";
         if (text.includes("```")) {
           text = text.replace(/```json\n?|```/g, "").trim();
         }
+        const result = JSON.parse(text);
         
-        if (!text.endsWith("]") && !text.endsWith("}")) {
-          if (text.lastIndexOf("}") > text.lastIndexOf("]")) {
-             text += "]";
-          } else {
-             text += "}]";
-          }
-        }
-        
-        return JSON.parse(text);
+        // Update products incrementally
+        setProducts(prev => {
+          if (!prev) return prev;
+          const next = [...prev];
+          next[index] = result;
+          return next;
+        });
+
+        return result;
       } catch (err: any) {
-        if (retries > 0 && err.message?.includes("503") || err.message?.includes("high demand")) {
-          await new Promise(resolve => setTimeout(resolve, 2000));
-          return analyzeWithRetry(query, retries - 1);
+        const errorStr = JSON.stringify(err);
+        const isSpendingCap = errorStr.includes("spending cap") || err.message?.includes("spending cap");
+        
+        const isRetryable = !isSpendingCap && (
+                           errorStr.includes("503") || errorStr.includes("high demand") || errorStr.includes("UNAVAILABLE") || 
+                           errorStr.includes("429") || errorStr.includes("Too Many Requests") ||
+                           err.message?.includes("503") || err.message?.includes("high demand") || err.status === "UNAVAILABLE"
+        );
+        
+        if (retries > 0 && isRetryable) {
+          // Faster exponential backoff: (2^attempt * 300) + random(0, 300)
+          const attempt = 3 - retries;
+          const delay = Math.pow(2, attempt) * 300 + Math.random() * 300;
+          await new Promise(resolve => setTimeout(resolve, delay));
+          return analyzeSingleProduct(query, index, retries - 1);
         }
         throw err;
       }
     };
 
     try {
-      const data = await analyzeWithRetry(finalQuery);
-      if (!Array.isArray(data) || data.length === 0) {
-        throw new Error("Format de données invalide reçu de l'IA.");
-      }
-      setProducts(data);
+      // Parallel calls without staggering for maximum speed
+      // The individual retry logic with jitter handles potential burst limits
+      await Promise.all([
+        analyzeSingleProduct(finalQuery, 0),
+        analyzeSingleProduct(finalQuery, 1),
+        analyzeSingleProduct(finalQuery, 2)
+      ]);
     } catch (err: any) {
       console.error("Analysis failed:", err);
       const message = err.message || "Erreur inconnue";
-      setError(`Erreur: ${message}. Veuillez vérifier votre configuration Cloud Run.`);
+      const errorStr = JSON.stringify(err);
+      
+      if (message.includes("spending cap") || errorStr.includes("spending cap")) {
+        setError("Votre limite de budget mensuelle sur Google AI Studio a été atteinte. Veuillez augmenter votre plafond de dépenses sur https://ai.studio/spend pour continuer à utiliser l'analyse.");
+      } else if (message.includes("503") || message.includes("UNAVAILABLE") || message.includes("demand")) {
+        setError("Les serveurs de Google sont actuellement surchargés. Veuillez patienter quelques secondes avant de réessayer.");
+      } else {
+        setError(`Erreur: ${message}. Veuillez vérifier votre configuration Cloud Run.`);
+      }
     } finally {
       setIsAnalyzing(false);
     }
